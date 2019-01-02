@@ -1,7 +1,13 @@
 import gym
 from itertools import product
+import numpy as np
 import random
 
+def show_board(board):
+    "We'll assume that [0,0] is the bottom-left"
+    for r in reversed(range(len(board))):
+        pretty_row = " ".join(str(e) for e in board[r])
+        print(pretty_row)
 
 def random_opponent(env):
     "An opponent that chooses squares randomly"
@@ -62,6 +68,10 @@ def connected_diagonals(board, num_to_connect):
     return False
 
 
+class IllegalMoveError(Exception):
+    pass
+
+
 class BaseConnectEnv(gym.Env):
     metadata = {'render.modes': ['human']}
     rows = None
@@ -80,10 +90,17 @@ class BaseConnectEnv(gym.Env):
         ]
 
     def render(self, mode='human', close=False):
-        "We'll assume that [0,0] is the bottom-left"
-        for r in reversed(range(self.rows)):
-            pretty_row = " ".join(str(e) for e in self.board[r])
-            print(pretty_row)
+        show_board(self.board)
+
+    def flat_board(self):
+        # concat the board row-wise and player-wise, convert to a numeric array
+        numeric_board = []
+        for mark in (self.my_team, self.their_team):
+            for row in self.board:
+                numeric_board += [1.0 if x == mark else 0.0 for x in row]
+
+        assert len(numeric_board) == (self.rows * self.columns * 2)
+        return np.array(numeric_board)
 
     def success(self):
         # check the rows
@@ -134,7 +151,7 @@ class BaseConnectEnv(gym.Env):
         options = self.legal_moves()
         # print("options: %s" % options)
         if action not in options:
-            raise ValueError(
+            raise IllegalMoveError(
                 "Bad move: {action} is not in {options}".format(
                     action=action, options=options))
 

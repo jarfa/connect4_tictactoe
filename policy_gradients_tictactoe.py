@@ -18,6 +18,7 @@ logging.basicConfig(
 
 def forward(board, weights):
     """predict next move"""
+    # TODO: I didn't bother with biases yet... I should do that.
     product = np.dot(board.reshape((1, -1)), weights).ravel()
     exp_product = np.exp(product)
     return exp_product / sum(exp_product)  # softmax
@@ -32,13 +33,19 @@ def backward(board, diff):
 
 def discount_rewards(r, gamma=0.8):
     """ take 1D float array of rewards and compute discounted reward
-    kinda copied from Karpathy's pong from pixels code"""
-    discounted_r = [0.0] * len(r)
-    discounted_r[-1] = r[-1]
-    for t in reversed(range(0, len(r) - 1)):
-        discounted_r[t] = discounted_r[t + 1] * gamma 
+    """
+    discounted_r = np.zeros(len(r))
+    game_reward = r[-1]
+    discounted_r[0] = 1.0
+    for i in range(1, len(r)):
+        discounted_r[i] = discounted_r[i - 1] * gamma
 
-    return discounted_r
+    # The total reward for each game should sum to the final reward. Otherwise,
+    # the agent would prefer longer wins over shorter wins, or shorter losses over
+    # longer losses, which would lead to weird behavior
+    discounted_r = game_reward * discounted_r / sum(discounted_r)
+
+    return list(discounted_r)[::-1]
 
 
 env = TictactoeEnv()
@@ -50,7 +57,9 @@ N_games = int(1e6)
 
 minibatch = 2500
 learning_rate = 0.1
-lr_decay = .99  #.995
+lr_decay = .99
+# l2_reg = 0.01
+
 
 reward_window = deque(maxlen=5000)
 
@@ -78,7 +87,8 @@ for g in range(1, 1 + N_games):
         try:
             _, reward, done, info = env.step(my_move, random_opponent)
         except IllegalMoveError:
-            reward = -1
+            reward = -2
+              #illegal moves are embarrassing, should be worse than losing
             done = True
             forfeit = True
         # env.render()
@@ -97,21 +107,26 @@ for g in range(1, 1 + N_games):
         recent_rewards = np.array(reward_window)
         def outcome_rate(outcome):
             return np.mean(recent_rewards == outcome)
+            
         logging.info(
-            "Episode %d. Wins: %.3f  Losses: %.3f Forfeits: %.3f Ties: %.3f (lr=%.1e)",
-            g, outcome_rate("w"), outcome_rate("l"), outcome_rate("f"),
-            outcome_rate("t"), learning_rate
+            "Episode %d. W: %.3f  L: %.3f  F: %.3f  T: %.3f  Wnorm: %.1e (lr=%.1e)",
+            g, outcome_rate("w"), outcome_rate("l"), outcome_rate("f"), outcome_rate("t"),
+            np.linalg.norm(weights, "fro"),
+            learning_rate
         )
         reward_window.clear()
 
     if g % minibatch == 0:
-    
+        # standardize the rewards
         rewards = np.array(rewards)
         rewards -= np.mean(rewards)
         rewards /= np.std(rewards)
 
         gradients = [backward(s, r * d) for r, s, d in zip(rewards, states, diffs)]
         weights += learning_rate * np.sum(gradients, axis=0)
+        # TODO: l2 norm regularization???
+        # weights -= 2.0 * l2_reg * weights
+
         learning_rate *= lr_decay
 
         rewards, states, diffs = [], [], []

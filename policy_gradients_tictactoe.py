@@ -43,32 +43,33 @@ def discount_rewards(r, gamma=0.8):
     # The total reward for each game should sum to the final reward. Otherwise,
     # the agent would prefer longer wins over shorter wins, or shorter losses over
     # longer losses, which would lead to weird behavior
-    discounted_r = game_reward * discounted_r / sum(discounted_r)
-
-    return list(discounted_r)[::-1]
+    discounted_r = discounted_r[::-1]
+    discounted_r = discounted_r * game_reward / sum(discounted_r)
+    return list(discounted_r)
 
 
 env = TictactoeEnv()
-init_weight_sd = 0.5
-
-weights = np.random.randn(18, 9) * init_weight_sd
 
 N_games = int(1e6)
 
 minibatch = 2500
 learning_rate = 0.1
-lr_decay = .99
+lr_decay = 0.99
 # l2_reg = 0.01
+init_weight_sd = 0.1  #0.5
 
+np.random.seed(5)
+weights = np.random.randn(18, 9) * init_weight_sd
 
 reward_window = deque(maxlen=5000)
 
 rewards, states, diffs = [], [], []
 move_choices = [(r, c) for r in range(3) for c in range(3)]
 
+max_win_rate = 0.0
+
 for g in range(1, 1 + N_games):
     env.reset()
-    # env.render(); print()
 
     for i in range(1, 101):
         # my_move = random.choice(env.legal_moves())  # take a random action
@@ -91,9 +92,6 @@ for g in range(1, 1 + N_games):
               #illegal moves are embarrassing, should be worse than losing
             done = True
             forfeit = True
-        # env.render()
-        # print(reward)
-        # print()
         if done:
             episode_rewards = [reward] * i
             rewards.extend(discount_rewards(episode_rewards))
@@ -114,6 +112,7 @@ for g in range(1, 1 + N_games):
             np.linalg.norm(weights, "fro"),
             learning_rate
         )
+        max_win_rate = max(max_win_rate, outcome_rate("w"))
         reward_window.clear()
 
     if g % minibatch == 0:
@@ -130,3 +129,5 @@ for g in range(1, 1 + N_games):
         learning_rate *= lr_decay
 
         rewards, states, diffs = [], [], []
+
+print("Max win rate: %.3f" % max_win_rate)

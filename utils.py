@@ -9,6 +9,7 @@ def show_board(board):
         pretty_row = " ".join(str(e) for e in board[r])
         print(pretty_row)
 
+
 def random_opponent(env):
     "An opponent that chooses squares randomly"
     options = env.legal_moves()
@@ -28,7 +29,7 @@ def array_connected(row, num_to_connect):
 
 
 def connected_rows(board, num_to_connect):
-    for row in board[::-1]:
+    for row in board:
         if array_connected(row, num_to_connect):
             return True
     return False
@@ -84,6 +85,7 @@ class BaseConnectEnv(gym.Env):
         self.board_init()
 
     def board_init(self):
+        # 0 will denote an empty cell
         self.board = [
             [0 for _ in range(self.columns)]
             for _ in range(self.rows)

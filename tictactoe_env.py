@@ -1,10 +1,5 @@
-import gym
-from gym import error, spaces, utils
-from gym.utils import seeding
+from utils import BaseConnectEnv
 
-from itertools import product
-
-from utils import connected_rows, BaseConnectEnv
 
 class TictactoeEnv(BaseConnectEnv):
     rows = 3
@@ -15,6 +10,7 @@ class TictactoeEnv(BaseConnectEnv):
 
     def __init__(self):
         super().__init__()
+        self.move_choices = [(r, c) for r in range(self.rows) for c in range(self.columns)]
 
     def legal_moves(self):
         "I don't like gym's action_space API, I'll do it my own way"

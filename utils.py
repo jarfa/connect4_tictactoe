@@ -1,19 +1,14 @@
-import gym
 from itertools import product
-import numpy as np
 import random
+import numpy as np
+import gym
+
 
 def show_board(board):
     "We'll assume that [0,0] is the bottom-left"
     for r in reversed(range(len(board))):
         pretty_row = " ".join(str(e) for e in board[r])
         print(pretty_row)
-
-
-def random_opponent(env):
-    "An opponent that chooses squares randomly"
-    options = env.legal_moves()
-    return random.choice(options)
 
 
 def array_connected(row, num_to_connect):
@@ -62,11 +57,68 @@ def connected_diagonals(board, num_to_connect):
             diag.append(board[r][c])
             r += 1
             c += 1
-    
+
         if array_connected(diag, num_to_connect):
             return True
-    
+
     return False
+
+
+def board_success(board, num_to_connect):
+    # check the rows
+    if connected_rows(board, num_to_connect):
+        return True
+    # check the columns
+    rows = len(board)
+    columns = len(board[0])
+    transposed_board = [
+        [board[r][c] for r in range(rows)]
+        for c in range(columns)
+    ]
+    if connected_rows(transposed_board, num_to_connect):
+        return True
+    # upward-sloping diagonals
+    if connected_diagonals(board, num_to_connect):
+        return True
+    # flip the board to check the other direction of diagonals
+    flipped_board = [row[::-1] for row in board]
+    if connected_diagonals(flipped_board, num_to_connect):
+        return True
+    return False
+
+
+def random_opponent(env):
+    "An opponent that chooses squares randomly"
+    options = env.legal_moves()
+    return random.choice(options)
+
+
+def _try_moves(legal_options, board, num_to_connect, team_mark):
+    for mv in random.sample(legal_options, len(legal_options)):
+        r, c = mv
+        tmp_board = list(board)  #copy it
+        tmp_board[r][c] = team_mark
+        if board_success(tmp_board, num_to_connect):
+            return mv
+
+    return None
+
+def check_next_step_opponent(env, random_only=0.5):
+    """Checks to see if the next step for either them or me leads to a win
+    Moves randomly otherwise
+    """
+    options = env.legal_moves()
+    if random.random() < random_only:  # sometimes move randomly
+        return random.choice(options)
+
+    # check to see if any of their moves lead directly to a win, then
+    # check to see if any of my moves lead directly to a win - block if so
+    for team in (env.their_team, env.my_team):
+        mv = _try_moves(options, env.board, env.num_to_connect, team)
+        if mv is not None:
+            return mv
+
+    return random.choice(options)
 
 
 class IllegalMoveError(Exception):
@@ -94,7 +146,7 @@ class BaseConnectEnv(gym.Env):
     def render(self, mode='human', close=False):
         show_board(self.board)
 
-    def flat_board(self):
+    def flat_board_double(self):
         # concat the board row-wise and player-wise, convert to a numeric array
         numeric_board = []
         for mark in (self.my_team, self.their_team):
@@ -104,36 +156,30 @@ class BaseConnectEnv(gym.Env):
         assert len(numeric_board) == (self.rows * self.columns * 2)
         return np.array(numeric_board)
 
-    def success(self):
-        # check the rows
-        if connected_rows(self.board, self.num_to_connect):
-            return True
-        # check the columns
-        transposed_board = [
-            [self.board[r][c] for r in range(self.rows)]
-            for c in range(self.columns)
-        ]
-        if connected_rows(transposed_board, self.num_to_connect):
-            return True
-        # upward-sloping diagonals
-        if connected_diagonals(self.board, self.num_to_connect):
-            return True
-        # flip the board to check the other direction of diagonals
-        flipped_board = [row[::-1] for row in self.board]
-        if connected_diagonals(flipped_board, self.num_to_connect):
-            return True 
-        return False
+    def square_board(self):
+        # unlike the flat board, we'll code up different marks as 1 and -1, respectively
+        def translator(x):
+            if x == self.my_team:
+                return 1.0
+            if x == self.their_team:
+                return -1.0
+            return 0.0
+
+        return np.array([[translator(x) for x in row] for row in self.board])
+
+    def flat_board(self):
+        return self.square_board().ravel()
 
     def empty_spaces(self):
         empties = []
         for r, c in product(range(self.rows), range(self.columns)):
             if self.board[r][c] == 0:
                 empties.append((r, c))
-    
+
         return empties
 
     def full_board_tie(self, verbose=False):
-        if len(self.empty_spaces()) == 0:
+        if not self.empty_spaces() == 0:
             if verbose:
                 print("No more moves, tie game!!!")
             return True
@@ -157,24 +203,24 @@ class BaseConnectEnv(gym.Env):
                 "Bad move: {action} is not in {options}".format(
                     action=action, options=options))
 
-        
+
         self.make_move(action, self.my_team)
         reward = 0
         full = False
-        
-        my_win = self.success()
+
+        my_win = board_success(self.board, self.num_to_connect)  # self.success()
         if my_win:
             reward = 1
         else:
             full = self.full_board_tie()
             if not full:
                 self.make_move(opponent_fn(self), self.their_team)
-                their_win = self.success()
+                their_win = board_success(self.board, self.num_to_connect)
                 if their_win:
                     reward = -1
                 else:
                     full = self.full_board_tie()
-        
+
         observation = self.board
         done = reward != 0 or full
         info = {}
@@ -182,3 +228,19 @@ class BaseConnectEnv(gym.Env):
 
     def reset(self):
         self.board_init()
+
+
+def discount_rewards(game_reward, n_turns, gamma=0.8):
+    """ take 1D float array of rewards and compute discounted reward
+    """
+    discounted_r = np.zeros(n_turns)
+    discounted_r[0] = 1.0
+    for i in range(1, n_turns):
+        discounted_r[i] = discounted_r[i - 1] * gamma
+
+    # The total reward for each game should sum to the final reward. Otherwise,
+    # the agent would prefer longer wins over shorter wins, or shorter losses over
+    # longer losses, which would lead to weird behavior
+    discounted_r = discounted_r[::-1]
+    discounted_r = discounted_r * game_reward / sum(discounted_r)
+    return list(discounted_r)

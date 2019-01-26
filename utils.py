@@ -103,22 +103,25 @@ def _try_moves(legal_options, board, num_to_connect, team_mark):
 
     return None
 
-def check_next_step_opponent(env, random_only=0.5):
-    """Checks to see if the next step for either them or me leads to a win
-    Moves randomly otherwise
-    """
-    options = env.legal_moves()
-    if random.random() < random_only:  # sometimes move randomly
+def make_next_stop_opponent(random_only_fraction):
+    "Just a factory to make it easy to create easy to hard opponents"
+    def check_next_step_opponent(env):
+        """Checks to see if the next step for either them or me leads to a win
+        Moves randomly otherwise
+        """
+        options = env.legal_moves()
+        if random.random() < random_only_fraction:  # sometimes move randomly
+            return random.choice(options)
+
+        # Check to see if any of their moves lead directly to a win, then check
+        # to see if any of my moves lead directly to a win - block if so.
+        for team in (env.their_team, env.my_team):
+            mv = _try_moves(options, env.board, env.num_to_connect, team)
+            if mv is not None:
+                return mv
+
         return random.choice(options)
-
-    # check to see if any of their moves lead directly to a win, then
-    # check to see if any of my moves lead directly to a win - block if so
-    for team in (env.their_team, env.my_team):
-        mv = _try_moves(options, env.board, env.num_to_connect, team)
-        if mv is not None:
-            return mv
-
-    return random.choice(options)
+    return check_next_step_opponent
 
 
 class IllegalMoveError(Exception):
@@ -179,7 +182,7 @@ class BaseConnectEnv(gym.Env):
         return empties
 
     def full_board_tie(self, verbose=False):
-        if not self.empty_spaces() == 0:
+        if not self.empty_spaces():
             if verbose:
                 print("No more moves, tie game!!!")
             return True

@@ -75,86 +75,66 @@ class BasePolicy(nn.Module):
         "Each policy could need a different input format"
         raise NotImplementedError()
 
+    def save_weights(self, path):
+        torch.save(self.state_dict(), path)
+
+    def load_weights(self, path):
+        self.load_state_dict(torch.load(path))
+
+
 
 class FlatConnectPolicy(BasePolicy):
     "Works for any size of board, connect 4 or tictactoe"
-    def __init__(self, D, H, out, gpu=False):
+    def __init__(self, board_size, H, double=False, gpu=False):
+        # `double` states whether the input is the same size as the board
+        # with with value {+1,0,-1} or 2x the size of the board and puts
+        # a 1 down for the x's and o's in separate cells.
         super(FlatConnectPolicy, self).__init__(gpu=gpu)
 
-        self.hidden = nn.Linear(D, H)
-        self.out = nn.Linear(H, out)
+        board_units = np.product(board_size)
+        self.double = double
+        input_units = board_units * (2 if double else 1)
+        self.hidden = nn.Linear(input_units, H)
+        self.out = nn.Linear(H, board_units)
 
     def forward(self, x):
         h = F.relu(self.hidden(x))
         logp = self.out(h)
         return F.softmax(logp, dim=0)
 
-    @staticmethod
-    def repr_input(env):
+    def repr_input(self, env):
+        if self.double:
+            return env.flat_board_double()
         return env.flat_board()
 
 
-class SimpleConvPolicy(BasePolicy):
-    def __init__(self, board_size, gpu=False):
-        super(SimpleConvPolicy, self).__init__(gpu=gpu)
-        # see example in https://pytorch.org/tutorials/beginner/blitz/neural_networks_tutorial.html
-        final_output_size = np.product(board_size)
-        conv1d_output_size = final_output_size
+class ConvConnectPolicy(BasePolicy):
+    "Kind of a kitchen sink approach to the problem"
+    def __init__(self, board_size, conv_channels, H1, H2, gpu=False):
+        super(ConvConnectPolicy, self).__init__(gpu=gpu)
+        board_units = np.product(board_size)
         conv2d_output_size = (board_size[0] - 1) * (board_size[1] - 1)
+        conv2_output_n = conv2d_output_size * conv_channels
 
-        conv2d_out_units = 5
-        conv1d_out_units = 2
-        conv_output_n = (conv2d_output_size * conv2d_out_units +
-                         conv1d_output_size * conv1d_out_units)
-
-        self.conv2d = nn.Conv2d(in_channels=1, out_channels=conv2d_out_units, kernel_size=2)
-        self.conv1d = nn.Conv2d(in_channels=1, out_channels=conv1d_out_units, kernel_size=1)
-        self.fc = nn.Linear(conv_output_n, final_output_size)
+        self.conv2d = nn.Conv2d(in_channels=1, out_channels=conv_channels, kernel_size=2)
+        self.fc1 = nn.Linear(conv2_output_n + board_units, H1)
+        self.fc2 = nn.Linear(H1, H2)
+        self.fc3 = nn.Linear(H2, board_units)
 
     def forward(self, x):
         formatted_x = x.unsqueeze(0).unsqueeze(0)
-        conv_results = (self.conv2d(formatted_x).view(-1),
-                        self.conv1d(formatted_x).view(-1))
-        hidden = F.relu(torch.cat(conv_results, 0))
-        logp = self.fc(hidden)
-
+        # concat the convolutional results with the raw input
+        conv_results = (F.relu(self.conv2d(formatted_x).view(-1)),
+                        formatted_x.view(-1))
+        hidden1 = self.fc1(torch.cat(conv_results, 0))
+        hidden2 = self.fc2(F.relu(hidden1))
+        logp = self.fc3(F.relu(hidden2))
         return F.softmax(logp, dim=0)
 
     @staticmethod
     def repr_input(env):
         return env.square_board()
 
-
-class ConvPlusHiddenPolicy(BasePolicy):  # TODO: Build on SimpleConvPolicy
-    def __init__(self, hidden_units, board_size, gpu=False):
-        super(ConvPlusHiddenPolicy, self).__init__(gpu=gpu)
-        final_output_size = np.product(board_size)
-        conv1d_output_size = final_output_size
-        conv2d_output_size = (board_size[0] - 1) * (board_size[1] - 1)
-
-        conv2d_out_units = 4
-        conv1d_out_units = 2
-        conv_output_n = (conv2d_output_size * conv2d_out_units +
-                         conv1d_output_size * conv1d_out_units)
-
-        self.conv2d = nn.Conv2d(in_channels=1, out_channels=conv2d_out_units, kernel_size=2)
-        self.conv1d = nn.Conv2d(in_channels=1, out_channels=conv1d_out_units, kernel_size=1)
-        self.fc1 = nn.Linear(conv_output_n, hidden_units)
-        self.fc2 = nn.Linear(hidden_units, final_output_size)
-
-    def forward(self, x):
-        formatted_x = x.unsqueeze(0).unsqueeze(0)
-        conv_results = (self.conv2d(formatted_x).view(-1),
-                        self.conv1d(formatted_x).view(-1))
-
-        hidden = F.relu(torch.cat(conv_results, 0))
-        hidden = self.fc1(hidden)
-        logp = self.fc2(F.relu(hidden))
-        return F.softmax(logp, dim=0)
-
-    @staticmethod
-    def repr_input(env):
-        return env.square_board()
 
 
 def translate_outcome(reward, forfeit):
@@ -170,8 +150,6 @@ def play_and_train(
     minibatch,
     forfeit_reward=-2,
     opponent_fn=random_opponent,
-    test_every=None,
-    test_N=None,
     ):
     reward_window = deque(maxlen=max(int(1e4), minibatch))
     max_win_rate = 0.0
@@ -198,7 +176,12 @@ def play_and_train(
             if done:
                 episode_rewards = discount_rewards(-1.0 * reward, i)
                 policy.rewards.extend(episode_rewards)
+                assert len(policy.rewards) == len(policy.saved_log_probs), (
+                    "Something is wrong: rewards len={}, logprobs len={}".format(
+                        len(policy.rewards), len(policy.saved_log_probs)
+                    ))
                 break
+
 
         reward_window.append(translate_outcome(reward, forfeit))
 
@@ -212,6 +195,7 @@ def play_and_train(
                 "{0:>7}".format(g), outcome_rate("w"), outcome_rate("l"),
                 outcome_rate("f"), outcome_rate("t")
             )
+
             max_win_rate = max(max_win_rate, outcome_rate("w"))
             reward_window.clear()
 
@@ -223,43 +207,5 @@ def play_and_train(
             optimizer.step()
             policy.cleanup()
 
-        if test_every and test_N and g % test_every == 0:
-            # test policy without randomly sampling from actions
-            play_and_test(env, policy, test_N, opponent_fn=opponent_fn)
-
     logging.info("Max win rate: %.3f", max_win_rate)
     return policy
-
-
-def play_and_test(env, policy, N_games, opponent_fn=random_opponent):
-    """ Similar to the above, but instead of moving probablistically,
-    always choose the best move. We want to know a policy's best possible
-    performance.
-    """
-    rewards = np.array([''] * N_games)
-
-    for g in range(1, 1 + N_games):
-        env.reset()
-        reward = 0
-        for _ in range(1, 1000):
-            forfeit = False  # if my move is an illegal space, that's a forfeit
-            with torch.no_grad():
-                action_ix = policy.select_action(policy.repr_input(env), only_best=True)
-            my_move = env.move_choices[action_ix]
-            try:
-                _, reward, done, info = env.step(my_move, opponent_fn)
-            except IllegalMoveError:
-                reward = -1
-                done = forfeit = True
-            if done:
-                break
-
-        rewards[g - 1] = translate_outcome(reward, forfeit)
-
-    def outcome_rate(outcome):
-        return np.mean(rewards == outcome)
-    logging.info(
-        "%d Test Games (No Sampling)  W: %.3f  L: %.3f  F: %.3f  T: %.3f",
-        g, outcome_rate("w"), outcome_rate("l"),
-        outcome_rate("f"), outcome_rate("t")
-    )

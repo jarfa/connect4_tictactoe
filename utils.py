@@ -124,6 +124,12 @@ def make_next_stop_opponent(random_only_fraction):
     return check_next_step_opponent
 
 
+def printable_action(action):
+    if len(action) == 1:
+        return str(action)
+    return ",".join(str(x) for x in action)
+
+
 class IllegalMoveError(Exception):
     pass
 
@@ -150,7 +156,7 @@ class BaseConnectEnv(gym.Env):
         show_board(self.board)
 
     def flat_board_double(self):
-        # concat the board row-wise and player-wise, convert to a numeric array
+        """Concat the board row-wise and player-wise, convert to a numeric array"""
         numeric_board = []
         for mark in (self.my_team, self.their_team):
             for row in self.board:
@@ -160,13 +166,9 @@ class BaseConnectEnv(gym.Env):
         return np.array(numeric_board)
 
     def square_board(self):
-        # unlike the flat board, we'll code up different marks as 1 and -1, respectively
+        """Unlike the flat board, we'll code up different marks as 1 and -1, respectively"""
         def translator(x):
-            if x == self.my_team:
-                return 1.0
-            if x == self.their_team:
-                return -1.0
-            return 0.0
+            return {self.my_team: 1.0, self.their_team: -1.0}.get(x, 0.0)
 
         return np.array([[translator(x) for x in row] for row in self.board])
 
@@ -198,26 +200,34 @@ class BaseConnectEnv(gym.Env):
         """
         raise NotImplementedError()
 
-    def step(self, action, opponent_fn):
+    def step(self, action, opponent_fn, show_moves=False):
+        if show_moves:
+            print("=" * 50)
+            print("X: " + printable_action(action))
         options = self.legal_moves()
-        # print("options: %s" % options)
         if action not in options:
             raise IllegalMoveError(
                 "Bad move: {action} is not in {options}".format(
                     action=action, options=options))
 
-
         self.make_move(action, self.my_team)
+        if show_moves:
+            show_board(self.board)
         reward = 0
         full = False
 
-        my_win = board_success(self.board, self.num_to_connect)  # self.success()
+        my_win = board_success(self.board, self.num_to_connect)
         if my_win:
             reward = 1
         else:
             full = self.full_board_tie()
             if not full:
-                self.make_move(opponent_fn(self), self.their_team)
+                their_move = opponent_fn(self)
+                self.make_move(their_move, self.their_team)
+                if show_moves:
+                    print("-" * 40)
+                    print("O: " + printable_action(their_move))
+                    show_board(self.board)
                 their_win = board_success(self.board, self.num_to_connect)
                 if their_win:
                     reward = -1
@@ -226,8 +236,10 @@ class BaseConnectEnv(gym.Env):
 
         observation = self.board
         done = reward != 0 or full
-        info = {}
-        return observation, reward, done, info
+        if show_moves:
+            print("Reward: {:d}{}".format(reward, " & Done!" if done else ""))
+            print("=" * 50)
+        return observation, reward, done, {}  # the last item is expected by the gym API
 
     def reset(self):
         self.board_init()

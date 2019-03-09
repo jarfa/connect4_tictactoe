@@ -24,18 +24,19 @@ logging.basicConfig(
 
 torch.manual_seed(5)
 
-policy = ConvConnectPolicy(conv_channels=7, H1=100, H2=50, board_size=(3, 3))
+# policy = ConvConnectPolicy(conv_channels=7, H1=100, H2=50, board_size=(3, 3))
+policy = FlatConnectPolicy(board_size=(3, 3), H=20, double=True)
 
-half_smart_opponent = make_next_stop_opponent(0.5)
 
 trained_policy = play_and_train(
     TictactoeEnv(),
     policy,
-    optim.Adam(policy.parameters(), lr=1e-3),
-    N_games=int(6e6),
-    minibatch=int(5e4),
+    optim.Adam(policy.parameters(), lr=5e-3),
+    N_games=int(1e6),
+    minibatch=int(2e4),
     forfeit_reward=-3,
-    opponent_fn=half_smart_opponent,
+    opponent_fn=make_next_stop_opponent(0.9),
+    show_moves_freq=int(2e4)
 )
 
 

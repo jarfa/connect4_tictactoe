@@ -150,6 +150,7 @@ def play_and_train(
     minibatch,
     forfeit_reward=-2,
     opponent_fn=random_opponent,
+    show_moves_freq=None
     ):
     reward_window = deque(maxlen=max(int(1e4), minibatch))
     max_win_rate = 0.0
@@ -163,13 +164,16 @@ def play_and_train(
 
     for g in range(1, 1 + N_games):
         env.reset()
+        show_moves = show_moves_freq is not None and g % show_moves_freq == 0
+        if show_moves:
+            print("Game %d" % g)
         for i in range(1, 1000):
             forfeit = False  # if my move is an illegal space, that's a forfeit
             # my_move = random.choice(env.legal_moves())  # take a random legal action
             action_ix = policy.select_action(policy.repr_input(env))
             my_move = env.move_choices[action_ix]
             try:
-                _, reward, done, info = env.step(my_move, opponent_fn)
+                _, reward, done, info = env.step(my_move, opponent_fn, show_moves=show_moves)
             except IllegalMoveError:
                 reward = forfeit_reward
                 done = forfeit = True
